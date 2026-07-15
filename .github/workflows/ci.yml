@@ -1,0 +1,78 @@
+name: ci
+on: [push, pull_request]
+
+# This Alien builds libcurl-impersonate v1.5.6 from source, and that source
+# statically builds BoringSSL, zlib, zstd, brotli, nghttp2, ngtcp2 and curl. It
+# takes about five minutes cold, which is exactly why it is worth running: the
+# entire value of this dist is that the build works on a machine that is not the
+# author's. The apt list is upstream's own (curl-impersonate's
+# docker/debian.dockerfile) -- golang for BoringSSL, ninja/cmake for its CMake
+# build. The autotools in it are not strictly needed, since upstream ships a
+# generated configure, but they are kept to stay in step with that list.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cpanminus git ninja-build cmake autoconf automake pkg-config libtool \
+            ca-certificates curl golang-go patch bzip2 xz-utils unzip build-essential
+
+      # The source build dominates the runtime, so cache it. Keyed on the
+      # alienfile: change the pinned version or the build recipe and the cache
+      # is correctly invalidated, but an unrelated Perl-side edit reuses it.
+      - name: cache the alien build
+        uses: actions/cache@v4
+        with:
+          path: _alien
+          key: alien-curlimpersonate-${{ runner.os }}-${{ hashFiles('alienfile') }}
+
+      - name: cpan deps
+        run: |
+          # cpanm cannot write the runner's perl tree, so it bootstraps
+          # local::lib into ~/perl5, which is not in the default @INC. Put it on
+          # PERL5LIB here and, via $GITHUB_ENV, for every later step. Not sudo:
+          # --installdeps runs Makefile.PL, and this one writes into the
+          # checkout, so as root it leaves _alien/ and MYMETA.json root-owned
+          # and every later step fails to write them.
+          export PERL5LIB="$HOME/perl5/lib/perl5${PERL5LIB:+:$PERL5LIB}"
+          echo "PERL5LIB=$PERL5LIB" >> "$GITHUB_ENV"
+          # Bootstrapped by hand because --installdeps has to run Makefile.PL,
+          # which cannot compile without them. The next step checks this list
+          # against what the dist actually declares.
+          cpanm --notest ExtUtils::MakeMaker Alien::Build::MM Alien::Build::Plugin::Download::Git
+          cpanm --notest --installdeps .
+
+      - name: configure-requires are actually declared
+        run: |
+          # Anything bootstrapped by hand above must also be declared, or a
+          # git checkout breaks while CI stays green.
+          perl Makefile.PL >/dev/null
+          perl -MJSON::PP -0777 -ne 'my $c = decode_json($_)->{prereqs}{configure}{requires} || {}; my @m = grep { !$c->{$_} } qw(Alien::Build::MM Alien::Build::Plugin::Download::Git); die "missing from CONFIGURE_REQUIRES: @m\n" if @m; print "configure_requires ok -- ", join(" ", sort keys %$c), "\n"' MYMETA.json
+
+      - name: build
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: test
+        run: make test
+
+      - name: prove the library is actually usable
+        run: |
+          # A smoke check outside the test harness: the suite already dlopens
+          # the library and resolves curl_easy_impersonate, so what this adds is
+          # that the module loads from blib and reports both flags -- which is
+          # all a consumer reads before it tries to link.
+          perl -Mblib -MAlien::curlimpersonate -e '
+            my $c = Alien::curlimpersonate->cflags;
+            my $l = Alien::curlimpersonate->libs;
+            die "no cflags\n" unless length $c;
+            die "no libs\n"   unless length $l;
+            print "cflags: $c\nlibs: $l\n";
+          '

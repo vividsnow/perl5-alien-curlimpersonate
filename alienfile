@@ -1,0 +1,71 @@
+use alienfile;
+
+# There is no system libcurl-impersonate; always build from source.
+probe sub { 'share' };
+
+share {
+    meta->prop->{start_url} = 'https://github.com/lexiforest/curl-impersonate.git';
+    plugin 'Download::Git' => ( version => qr/^v(1\.5\.6)$/ );   # pin
+
+    # Upstream's Makefile.in is GNU-only (ifneq/$(filter ...)); BSD make chokes.
+    plugin 'Build::Make' => 'gmake';
+
+    build [
+        # AC_CHECK_PROGS does not error on a missing cmake/ninja, it substitutes
+        # empty; go it never checks at all, though BoringSSL needs it.
+        sub {
+            my @path = grep { length } split /:/, ($ENV{PATH} // '');
+            my $have = sub {
+                my $name = shift;
+                for my $dir (@path) { return 1 if -x "$dir/$name" }
+                return 0;
+            };
+            my @missing;
+            for my $alt ([qw(git)], [qw(cmake cmake3)], [qw(ninja ninja-build)],
+                         [qw(go)], [qw(patch)]) {
+                push @missing, join('/', @$alt) unless grep { $have->($_) } @$alt;
+            }
+            return unless @missing;
+            die "Alien::curlimpersonate: cannot build, missing: @missing\n"
+              . "curl-impersonate builds BoringSSL (Go + CMake + Ninja) and curl\n"
+              . "from source. Install the toolchain and try again:\n"
+              . "  Debian/Ubuntu  apt-get install git cmake ninja-build golang-go patch build-essential\n"
+              . "  Fedora/RHEL    dnf install git cmake ninja-build golang patch gcc gcc-c++\n"
+              . "  macOS          brew install cmake ninja go\n";
+        },
+        [ 'sh', '-c', 'mkdir -p build && cd build && ../configure --prefix="%{.install.prefix}" && "%{make}" build && "%{make}" install' ],
+    ];
+
+    # libcurl-impersonate ships no .pc file; set cflags/libs explicitly.
+    gather sub {
+        my ($build) = @_;
+        # The files are in the stage dir now; prefix is where they will live once
+        # installed, and does not exist yet. Check the former, emit the latter.
+        my $prefix = $build->runtime_prop->{prefix};
+        my $stage  = $build->install_prop->{stage}
+            or die "Alien::curlimpersonate: Alien::Build reported no stage directory\n";
+        # Not just lib/: autotools uses lib64/ on some distros, and asserting
+        # nothing would ship an Alien whose flags point at nothing.
+        my $libdir;
+        for my $dir (qw(lib lib64)) {
+            next unless -d "$stage/$dir";
+            # List context: a scalar glob is a per-call-site iterator, and a hit
+            # leaves it mid-stream (lib/ holds .so, .so.4, .so.4.8.0).
+            my @found = glob "$stage/$dir/libcurl-impersonate.*";
+            next unless @found;
+            $libdir = $dir;
+            last;
+        }
+        die "Alien::curlimpersonate: build reported success but no "
+          . "libcurl-impersonate.* is under $stage (looked in lib/ and lib64/)\n"
+            unless defined $libdir;
+        # As load-bearing as libs: a consumer finds out at "curl/curl.h: No such file".
+        die "Alien::curlimpersonate: build reported success but "
+          . "$stage/include/curl/curl.h is missing\n"
+            unless -f "$stage/include/curl/curl.h";
+        $build->runtime_prop->{cflags} = "-I$prefix/include";
+        # No rpath: Alien::Base relocates -L but not -Wl,-rpath, so one set here
+        # would point at the stage dir. See "LINKING AGAINST IT" in the POD.
+        $build->runtime_prop->{libs}   = "-L$prefix/$libdir -lcurl-impersonate";
+    };
+};
