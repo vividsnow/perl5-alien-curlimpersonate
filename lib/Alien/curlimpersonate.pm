@@ -1,7 +1,7 @@
 package Alien::curlimpersonate;
 use v5.10; use strict; use warnings;
 use parent 'Alien::Base';
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 1;
 
 __END__
@@ -48,8 +48,14 @@ libcurl-impersonate to find, so the probe always selects a C<share> install
 and the library is compiled at install time. See L</"SYSTEM REQUIREMENTS">,
 because that build is neither short nor dependency-free.
 
-The pinned upstream version is B<v1.5.6>, from
-L<https://github.com/lexiforest/curl-impersonate>.
+The pinned version is B<v2.1.1>, built from
+L<https://github.com/vividsnow/curl-impersonate> -- a fork of
+L<https://github.com/lexiforest/curl-impersonate> at that tag, carrying one
+commit. Upstream's CMake configure aborts under CMake 4, because curl's
+C<curl_openssl_check_exists()> puts the imported targets C<OpenSSL::SSL> and
+C<OpenSSL::Crypto> into C<CMAKE_REQUIRED_LIBRARIES> and the scratch project
+C<try_compile()> generates has no such targets. CMake 3 tolerated that; CMake 4
+does not. The pin returns to upstream once an equivalent fix lands there.
 
 =head1 SYSTEM REQUIREMENTS
 
@@ -60,21 +66,26 @@ ngtcp2 alongside curl itself. That needs, on top of a C and C++ compiler:
 
 =item * C<git> -- the source is fetched by cloning the upstream repository
 
-=item * C<cmake> (or C<cmake3>) and C<ninja> (or C<ninja-build>) -- BoringSSL
+=item * C<cmake> 3.20 or newer -- the build is a CMake superbuild.
+L<Alien::cmake3> supplies one where the system has none, but it promises only
+3.x, so the version is checked before the build starts.
+
+=item * C<ninja> (or C<ninja-build>) -- the curl subproject forces the Ninja
+generator
 
 =item * C<go> -- BoringSSL's build generates sources with it
 
-=item * C<patch> -- upstream patches curl before building it
+=item * C<patch> -- upstream patches curl and its dependencies
 
-=item * GNU make -- upstream's makefile uses GNU-only conditionals. It is found
-automatically, and L<Alien::gmake> is pulled in if the system has no GNU make.
+=item * C<curl> and C<make> -- libidn2 is fetched and built by a shell script,
+separately from CMake, because CMake requires it prebuilt and will not build it
 
 =back
 
 The build checks for these before it starts and names anything missing,
 rather than failing deep inside a compile. On Debian or Ubuntu:
 
-    apt-get install git cmake ninja-build golang-go patch build-essential
+    apt-get install git cmake ninja-build golang-go patch curl build-essential
 
 B<Expect the install to take several minutes> -- around five or six on a
 current machine, and longer on a slow or loaded one. It is a full BoringSSL
@@ -123,10 +134,12 @@ example.
 
 =head1 CAVEATS
 
-The upstream version is pinned exactly. That is deliberate -- the whole point
-of this Alien is a reproducible fingerprint, and the set of impersonation
-targets changes between upstream releases -- but it means a newer
-curl-impersonate needs a new release of this dist rather than a rebuild.
+The version is pinned exactly. That is deliberate -- the whole point of this
+Alien is a reproducible fingerprint, and the set of impersonation targets
+changes between releases -- but it means a newer curl-impersonate needs a new
+release of this dist rather than a rebuild. It is also load-bearing: upstream
+2.0.0 replaced the autotools build with CMake outright, so a floating pin would
+have broken the build the moment that tag was cut.
 
 =head1 SEE ALSO
 

@@ -1,7 +1,7 @@
 name: ci
 on: [push, pull_request]
 
-# This Alien builds libcurl-impersonate v1.5.6 from source, and that source
+# This Alien builds libcurl-impersonate from source, and that source
 # statically builds BoringSSL, zlib, zstd, brotli, nghttp2, ngtcp2 and curl. It
 # takes about five minutes cold, which is exactly why it is worth running: the
 # entire value of this dist is that the build works on a machine that is not the
