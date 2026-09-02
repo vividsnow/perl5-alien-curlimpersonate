@@ -23,15 +23,6 @@ jobs:
             cpanminus git ninja-build cmake autoconf automake pkg-config libtool \
             ca-certificates curl golang-go patch bzip2 xz-utils unzip build-essential
 
-      # The source build dominates the runtime, so cache it. Keyed on the
-      # alienfile: change the pinned version or the build recipe and the cache
-      # is correctly invalidated, but an unrelated Perl-side edit reuses it.
-      - name: cache the alien build
-        uses: actions/cache@v4
-        with:
-          path: _alien
-          key: alien-curlimpersonate-${{ runner.os }}-${{ hashFiles('alienfile') }}
-
       - name: cpan deps
         run: |
           # cpanm cannot write the runner's perl tree, so it bootstraps
@@ -55,6 +46,13 @@ jobs:
           perl Makefile.PL >/dev/null
           perl -MJSON::PP -0777 -ne 'my $c = decode_json($_)->{prereqs}{configure}{requires} || {}; my @m = grep { !$c->{$_} } qw(Alien::Build::MM Alien::Build::Plugin::Download::Git); die "missing from CONFIGURE_REQUIRES: @m\n" if @m; print "configure_requires ok -- ", join(" ", sort keys %$c), "\n"' MYMETA.json
 
+      # Deliberately cold every time. Caching _alien saves about three minutes
+      # and breaks the job two ways: the restored tree makes Makefile.PL exit
+      # 255 before the build (MakeMaker's manifest check walks it following
+      # symlinks and dies on the versioned .so chains), and its completed stage
+      # stamps make the install phase a no-op, so blib never gets the share
+      # directory and every test fails to find it. Proving the source build
+      # works on a machine that is not the author's is the point of this dist.
       - name: build
         run: |
           perl Makefile.PL
